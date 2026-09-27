@@ -1,5 +1,6 @@
+use super::expiration_heap::ExpiryItem;
 use chrono::{DateTime, Utc};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BinaryHeap};
 use std::sync::PoisonError;
 use std::sync::{Arc, RwLock};
 
@@ -23,16 +24,22 @@ impl Entry {
     pub fn new(value: Vec<u8>, expires_at: Option<DateTime<Utc>>) -> Self {
         Self { value, expires_at }
     }
+
+    pub fn is_expired_by(&self, item: &ExpiryItem) -> bool {
+        self.expires_at == Some(item.expires_at)
+    }
 }
 
 struct KvState {
     elements: BTreeMap<Vec<u8>, Entry>,
+    expiration_heap: BinaryHeap<ExpiryItem>,
 }
 
 impl KvState {
     pub fn new() -> Self {
         Self {
             elements: BTreeMap::<Vec<u8>, Entry>::new(),
+            expiration_heap: BinaryHeap::<ExpiryItem>::new(),
         }
     }
 }
@@ -62,6 +69,11 @@ impl Store {
     ) -> Result<(), StoreError> {
         let mut guard = self.state.write()?;
         let duration = ttl_seconds.map(|sec| Utc::now() + std::time::Duration::from_secs(sec));
+        if let Some(expires_at) = duration {
+            guard
+                .expiration_heap
+                .push(ExpiryItem::new(expires_at, key.clone()));
+        }
         let entry = Entry::new(value, duration);
         guard.elements.insert(key, entry);
         Ok(())
@@ -97,6 +109,32 @@ impl Store {
             });
 
         Ok(is_valid)
+    }
+
+    pub fn cleanup_expired(&self) -> Result<usize, StoreError> {
+        let mut guard = self.state.write()?;
+        let now = Utc::now();
+        let mut removed_count = 0;
+        while guard
+            .expiration_heap
+            .peek()
+            .is_some_and(|item| item.expires_at <= now)
+        {
+            let Some(item) = guard.expiration_heap.pop() else {
+                continue;
+            };
+
+            if guard
+                .elements
+                .get(&item.key)
+                .is_some_and(|e| e.is_expired_by(&item))
+            {
+                guard.elements.remove(&item.key);
+                removed_count += 1;
+            }
+        }
+
+        Ok(removed_count)
     }
 }
 
@@ -204,7 +242,7 @@ mod tests {
     }
 
     #[test]
-    fn test_exipred_item() {
+    fn test_expired_item() {
         let store = Store::new();
         store
             .put(b"one".to_vec(), b"one".to_vec(), Some(1))
@@ -212,5 +250,59 @@ mod tests {
         assert_eq!(store.get(b"one").unwrap(), Some(b"one".to_vec()));
         sleep(Duration::from_millis(1100));
         assert!(!store.exists(b"one").unwrap());
+    }
+
+    #[test]
+    fn test_entry_is_expired_by() {
+        let now = Utc::now();
+        let later = now + std::time::Duration::from_secs(10);
+
+        let entry = Entry::new(b"value".to_vec(), Some(now));
+
+        let matching_item = ExpiryItem::new(now, b"key".to_vec());
+        let mismatching_item = ExpiryItem::new(later, b"key".to_vec());
+
+        assert!(entry.is_expired_by(&matching_item));
+        assert!(!entry.is_expired_by(&mismatching_item));
+    }
+
+    #[test]
+    fn test_cleanup_expired_removes_only_expired_keys() {
+        let store = Store::new();
+
+        store
+            .put(b"expired_key".to_vec(), b"val1".to_vec(), Some(1))
+            .unwrap();
+        store
+            .put(b"valid_key".to_vec(), b"val2".to_vec(), Some(60))
+            .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+
+        let removed = store.cleanup_expired().unwrap();
+
+        assert_eq!(removed, 1);
+        assert!(!store.exists(b"expired_key").unwrap());
+        assert!(store.exists(b"valid_key").unwrap());
+    }
+
+    #[test]
+    fn test_cleanup_expired_handles_overwritten_keys() {
+        let store = Store::new();
+
+        store
+            .put(b"key".to_vec(), b"val1".to_vec(), Some(1))
+            .unwrap();
+        store
+            .put(b"key".to_vec(), b"val2".to_vec(), Some(60))
+            .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+
+        let removed = store.cleanup_expired().unwrap();
+
+        assert_eq!(removed, 0);
+        assert!(store.exists(b"key").unwrap());
+        assert_eq!(store.get(b"key").unwrap(), Some(b"val2".to_vec()));
     }
 }
