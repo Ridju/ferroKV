@@ -23,6 +23,44 @@ pub enum RespFrame {
 }
 
 impl RespFrame {
+    pub fn encode(&self, buf: &mut Vec<u8>) {
+        match self {
+            RespFrame::SimpleString(s) => {
+                buf.push(b'+');
+                buf.extend_from_slice(s.as_bytes());
+                buf.extend_from_slice(b"\r\n");
+            }
+            RespFrame::Error(e) => {
+                buf.push(b'-');
+                buf.extend_from_slice(e.as_bytes());
+                buf.extend_from_slice(b"\r\n");
+            }
+            RespFrame::Integer(i) => {
+                buf.push(b':');
+                buf.extend_from_slice(i.to_string().as_bytes());
+                buf.extend_from_slice(b"\r\n");
+            }
+            RespFrame::BulkString(bytes) => {
+                buf.push(b'$');
+                buf.extend_from_slice(bytes.len().to_string().as_bytes());
+                buf.extend_from_slice(b"\r\n");
+                buf.extend_from_slice(bytes);
+                buf.extend_from_slice(b"\r\n");
+            }
+            RespFrame::Array(frames) => {
+                buf.push(b'*');
+                buf.extend_from_slice(frames.len().to_string().as_bytes());
+                buf.extend_from_slice(b"\r\n");
+                for frame in frames {
+                    frame.encode(buf);
+                }
+            }
+            RespFrame::Null => {
+                buf.extend_from_slice(b"$-1\r\n");
+            }
+        }
+    }
+
     pub fn parse_prefix(input: &[u8], offset: &mut usize) -> Result<RespFrame, FrameError> {
         if *offset >= input.len() {
             return Err(FrameError::Incomplete);
@@ -293,5 +331,37 @@ mod tests {
         let frame2 = RespFrame::parse_prefix(input, &mut offset).unwrap();
         assert_eq!(frame2, RespFrame::SimpleString("PONG".to_string()));
         assert_eq!(offset, 14);
+    }
+
+    #[test]
+    fn test_encode_simple_string() {
+        let frame = RespFrame::SimpleString("OK".to_string());
+        let mut buf = Vec::new();
+        frame.encode(&mut buf);
+        assert_eq!(buf, b"+OK\r\n");
+    }
+
+    #[test]
+    fn test_encode_bulk_string() {
+        let frame = RespFrame::BulkString(b"hello".to_vec());
+        let mut buf = Vec::new();
+        frame.encode(&mut buf);
+        assert_eq!(buf, b"$5\r\nhello\r\n");
+    }
+
+    #[test]
+    fn test_encode_null() {
+        let frame = RespFrame::Null;
+        let mut buf = Vec::new();
+        frame.encode(&mut buf);
+        assert_eq!(buf, b"$-1\r\n");
+    }
+
+    #[test]
+    fn test_encode_integer() {
+        let frame = RespFrame::Integer(100);
+        let mut buf = Vec::new();
+        frame.encode(&mut buf);
+        assert_eq!(buf, b":100\r\n");
     }
 }
