@@ -1,1 +1,2 @@
-mod frame;
+pub mod command;
+pub mod frame;

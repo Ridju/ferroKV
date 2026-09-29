@@ -23,7 +23,7 @@ pub enum RespFrame {
 }
 
 impl RespFrame {
-    fn parse_prefix(input: &[u8], offset: &mut usize) -> Result<RespFrame, FrameError> {
+    pub fn parse_prefix(input: &[u8], offset: &mut usize) -> Result<RespFrame, FrameError> {
         if *offset >= input.len() {
             return Err(FrameError::Incomplete);
         }
