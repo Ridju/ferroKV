@@ -1,12 +1,17 @@
+use super::byte_key_map;
 use super::expiration_heap::ExpiryItem;
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BinaryHeap};
+use std::path::Path;
 use std::sync::PoisonError;
 use std::sync::{Arc, RwLock};
 
 #[derive(Debug)]
 pub enum StoreError {
     LockError(String),
+    IOError(String),
+    ParseError(String),
 }
 
 impl<T> From<PoisonError<T>> for StoreError {
@@ -15,7 +20,20 @@ impl<T> From<PoisonError<T>> for StoreError {
     }
 }
 
-struct Entry {
+impl From<std::io::Error> for StoreError {
+    fn from(err: std::io::Error) -> Self {
+        StoreError::IOError(err.to_string())
+    }
+}
+
+impl From<serde_json::Error> for StoreError {
+    fn from(err: serde_json::Error) -> Self {
+        StoreError::ParseError(err.to_string())
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Entry {
     value: Vec<u8>,
     expires_at: Option<DateTime<Utc>>,
 }
@@ -30,8 +48,11 @@ impl Entry {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 struct KvState {
+    #[serde(with = "byte_key_map")]
     elements: BTreeMap<Vec<u8>, Entry>,
+    #[serde(skip)]
     expiration_heap: BinaryHeap<ExpiryItem>,
 }
 
@@ -136,11 +157,41 @@ impl Store {
 
         Ok(removed_count)
     }
+
+    pub fn save_snapshot(&self, path: &Path) -> Result<(), StoreError> {
+        let file = std::fs::File::create(path)?;
+        let writer = std::io::BufWriter::new(file);
+        let guard = self.state.read()?;
+        serde_json::to_writer(writer, &*guard)?;
+        Ok(())
+    }
+
+    pub fn load_snapshot(path: &Path) -> Result<Self, StoreError> {
+        let file = std::fs::File::open(path)?;
+        let reader = std::io::BufReader::new(file);
+        let mut state: KvState = serde_json::from_reader(reader)?;
+        let mut expiration_heap: BinaryHeap<ExpiryItem> = BinaryHeap::new();
+
+        for (key, entry) in &state.elements {
+            if let Some(expires_at) = entry.expires_at
+                && expires_at > Utc::now()
+            {
+                let item = ExpiryItem::new(expires_at, key.clone());
+                expiration_heap.push(item);
+            }
+        }
+        state.expiration_heap = expiration_heap;
+
+        Ok(Self {
+            state: Arc::new(RwLock::new(state)),
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::thread::sleep;
     use std::time::Duration;
 
@@ -304,5 +355,86 @@ mod tests {
         assert_eq!(removed, 0);
         assert!(store.exists(b"key").unwrap());
         assert_eq!(store.get(b"key").unwrap(), Some(b"val2".to_vec()));
+    }
+
+    fn temp_file_path(name: &str) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "kv_store_test_{}_{}.json",
+            name,
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        path
+    }
+
+    #[test]
+    fn test_save_and_load_basic_snapshot() {
+        let path = temp_file_path("basic");
+        let store = Store::new();
+
+        store
+            .put(b"key1".to_vec(), b"value1".to_vec(), None)
+            .unwrap();
+        store
+            .put(b"key2".to_vec(), b"value2".to_vec(), None)
+            .unwrap();
+
+        store.save_snapshot(&path).unwrap();
+
+        let loaded_store = Store::load_snapshot(&path).unwrap();
+
+        assert_eq!(loaded_store.get(b"key1").unwrap(), Some(b"value1".to_vec()));
+        assert_eq!(loaded_store.get(b"key2").unwrap(), Some(b"value2".to_vec()));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_save_and_load_with_ttl() {
+        let path = temp_file_path("ttl");
+        let store = Store::new();
+
+        store
+            .put(b"expiring_key".to_vec(), b"val".to_vec(), Some(60))
+            .unwrap();
+        store.save_snapshot(&path).unwrap();
+
+        let loaded_store = Store::load_snapshot(&path).unwrap();
+
+        assert!(loaded_store.exists(b"expiring_key").unwrap());
+        assert_eq!(
+            loaded_store.get(b"expiring_key").unwrap(),
+            Some(b"val".to_vec())
+        );
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_load_snapshot_ignores_already_expired_keys() {
+        let path = temp_file_path("expired");
+        let store = Store::new();
+
+        store
+            .put(b"quick_expire".to_vec(), b"val".to_vec(), Some(1))
+            .unwrap();
+        store.save_snapshot(&path).unwrap();
+
+        sleep(Duration::from_millis(1100));
+
+        let loaded_store = Store::load_snapshot(&path).unwrap();
+
+        assert!(!loaded_store.exists(b"quick_expire").unwrap());
+        assert_eq!(loaded_store.get(b"quick_expire").unwrap(), None);
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_load_snapshot_non_existent_file() {
+        let path = temp_file_path("non_existent");
+        let result = Store::load_snapshot(&path);
+
+        assert!(result.is_err());
     }
 }
