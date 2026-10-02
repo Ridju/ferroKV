@@ -12,7 +12,7 @@ impl From<std::str::Utf8Error> for FrameError {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum RespFrame {
     SimpleString(String),
     Error(String),

@@ -16,7 +16,9 @@ impl Connection {
         }
     }
 
-    pub async fn read_frame(&mut self) -> Result<Option<RespFrame>, Box<dyn std::error::Error>> {
+    pub async fn read_frame(
+        &mut self,
+    ) -> Result<Option<RespFrame>, Box<dyn std::error::Error + Send + Sync>> {
         let mut chunk = [0u8; 512];
 
         loop {
@@ -40,7 +42,9 @@ impl Connection {
         }
     }
 
-    fn parse_frame(&mut self) -> Result<Option<RespFrame>, Box<dyn std::error::Error>> {
+    fn parse_frame(
+        &mut self,
+    ) -> Result<Option<RespFrame>, Box<dyn std::error::Error + Send + Sync>> {
         if self.buffer.is_empty() {
             return Ok(None);
         }
@@ -65,7 +69,7 @@ impl Connection {
     pub async fn write_frame(
         &mut self,
         frame: &RespFrame,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut response_bytes = Vec::new();
         frame.encode(&mut response_bytes);
 

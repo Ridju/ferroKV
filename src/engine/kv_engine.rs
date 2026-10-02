@@ -1,7 +1,9 @@
+use crate::memory::store::Store;
 use crate::memory::store::StoreError;
 use crate::resp::command::Command;
-
-use crate::{CommandError, RespFrame, memory::store::Store};
+use crate::resp::command::CommandError;
+use crate::resp::frame::RespFrame;
+use std::fmt;
 
 #[derive(Debug)]
 pub enum KVEngineError {
@@ -20,6 +22,14 @@ impl From<StoreError> for KVEngineError {
         Self::StoreError(err)
     }
 }
+
+impl fmt::Display for KVEngineError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "KVEngine error: {:?}", self)
+    }
+}
+
+impl std::error::Error for KVEngineError {}
 
 pub struct KvEngine {
     store: Store,

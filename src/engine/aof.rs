@@ -1,10 +1,11 @@
+use std::fmt;
 use std::{
     fs::{File, OpenOptions},
     io::{BufWriter, Write},
     path::{Path, PathBuf},
 };
 
-use crate::{RespFrame, resp::frame::FrameError};
+use crate::resp::frame::{FrameError, RespFrame};
 
 #[derive(Debug)]
 pub enum AofError {
@@ -16,6 +17,16 @@ impl From<std::io::Error> for AofError {
         Self::IOError(err.to_string())
     }
 }
+
+impl fmt::Display for AofError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AofError::IOError(msg) => write!(f, "AOF IO Error: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for AofError {}
 
 pub struct AofEngine {
     writer: BufWriter<File>,
