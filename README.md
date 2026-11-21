@@ -43,7 +43,7 @@ The binary reads environment variables at startup:
    *(If you want to connect from outside the container, make sure port `6379` is forwarded in `.devcontainer/devcontainer.json` and bind with `SERVER_ADDR=0.0.0.0:6379`.)*
 
 ### Local without Devcontainer
-If you run directly on your host machine instead of inside the Devcontainer, you only need Rust and Cargo installed ([rustup.rs](https://rustup.rs/)):
+If you run directly on your host machine instead of inside the Devcontainer, you only need Rust and Cargo installed rustup:
 ```bash
 git clone https://github.com/Ridju/ferroKV.git 
 cd ferroKV
